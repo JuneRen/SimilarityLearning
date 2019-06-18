@@ -4,11 +4,9 @@ import time
 from datasets.mnist import MNIST
 from datasets.semeval import SemEval, SemEvalPartitionFactory
 from datasets.voxceleb import VoxCeleb1
-from losses.base import BaseTrainer, TrainLogger, TestLogger, Visualizer,\
-    BestModelSaver, ModelLoader, DeviceMapperTransform, RegularModelSaver
-from metrics import KNNAccuracyMetric, LogitsSpearmanMetric, \
-    DistanceSpearmanMetric, STSEmbeddingEvaluator, STSBaselineEvaluator, \
-    SpeakerVerificationEvaluator, ClassAccuracyEvaluator
+from losses.base import BaseTrainer, TrainLogger, TestLogger, Visualizer, RegularModelSaver, BestModelSaver, ModelLoader, DeviceMapperTransform
+from metrics import KNNAccuracyMetric, LogitsSpearmanMetric, DistanceSpearmanMetric
+from evaluators import SingleForwardMetricEvaluator, PairForwardMetricEvaluator, SpeakerVerificationTrialEvaluator, EvaluatorTrainingListener
 from models import MNISTNet, SpeakerNet, SemanticNet
 from sts.modes import STSForwardModeFactory
 from sts.augmentation import SemEvalAugmentationStrategyFactory
@@ -87,19 +85,25 @@ if args.save:
     test_callbacks.append(BestModelSaver(args.task, args.loss, 'tmp'))
 
 if args.task == 'mnist':
-    evaluator = ClassAccuracyEvaluator(DEVICE, dev, KNNAccuracyMetric(config.test_distance),
-                                       batch_transforms, test_callbacks)
+    wrapped_evaluator = SingleForwardMetricEvaluator(dev, KNNAccuracyMetric(config.test_distance))
+    evaluator = EvaluatorTrainingListener(wrapped_evaluator, interval=1, keep_train_embeddings=args.plot, callbacks=test_callbacks)
+    # evaluator = ClassAccuracyEvaluator(DEVICE, dev, KNNAccuracyMetric(config.test_distance),
+    #                                    batch_transforms, test_callbacks)
 elif args.task == 'speaker':
     train_callbacks.append(RegularModelSaver(args.task, args.loss, 'tmp', interval=5))
-    evaluator = SpeakerVerificationEvaluator(DEVICE, args.batch_size, config.test_distance,
-                                             args.eval_interval, dataset.config, test_callbacks)
+    wrapped_evaluator = SpeakerVerificationTrialEvaluator('development', args.batch_size, config.test_distance, dataset.config)
+    evaluator = EvaluatorTrainingListener(wrapped_evaluator, interval=args.eval_interval, keep_train_embeddings=False, callbacks=test_callbacks)
+    # evaluator = SpeakerVerificationEvaluator(DEVICE, args.batch_size, config.test_distance,
+    #                                          args.eval_interval, dataset.config, test_callbacks)
 # STS
 elif args.loss == 'kldiv':
-    metric = LogitsSpearmanMetric()
-    evaluator = STSBaselineEvaluator(DEVICE, dev, metric, batch_transforms, test_callbacks)
+    wrapped_evaluator = SingleForwardMetricEvaluator(dev, LogitsSpearmanMetric(), test_callbacks)
+    evaluator = EvaluatorTrainingListener(wrapped_evaluator, interval=1, keep_train_embeddings=False, callbacks=test_callbacks)
+    # evaluator = STSBaselineEvaluator(DEVICE, dev, metric, batch_transforms, test_callbacks)
 else:
-    metric = DistanceSpearmanMetric(config.test_distance)
-    evaluator = STSEmbeddingEvaluator(DEVICE, dev, metric, batch_transforms, test_callbacks)
+    wrapped_evaluator = PairForwardMetricEvaluator(dev, DistanceSpearmanMetric(config.test_distance), test_callbacks)
+    evaluator = EvaluatorTrainingListener(wrapped_evaluator, interval=1, keep_train_embeddings=False, callbacks=test_callbacks)
+    # evaluator = STSEmbeddingEvaluator(DEVICE, dev, metric, batch_transforms, test_callbacks)
 
 train_callbacks.append(evaluator)
 
